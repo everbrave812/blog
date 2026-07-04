@@ -3,6 +3,10 @@
 <head>
 <meta charset="utf-8">
 <title>Jun's Notes</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+<script src="render.js"></script>
 </head>
 <body bgcolor="#FFFFFF" text="#000000" link="#0000EE" vlink="#551A8B">
 <font face="Times New Roman, Times, serif">
@@ -14,19 +18,6 @@
 <p><a href="index.html">&lt;&lt; 목록으로</a></p>
 
 <script>
-function escapeHtml(s) {
-  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-}
-
-function renderContent(raw) {
-  return raw
-    .split(/\n\n+/)
-    .map(function (para) {
-      return "<p>" + escapeHtml(para).replace(/\n/g, "<br>") + "</p>";
-    })
-    .join("");
-}
-
 var slug = new URLSearchParams(location.search).get("slug");
 
 fetch("posts.json?_=" + Date.now())
@@ -42,7 +33,7 @@ fetch("posts.json?_=" + Date.now())
     html += "<h2>" + escapeHtml(post.title) + "</h2>";
     html += "<p><small>" + escapeHtml(post.date) + " [" + escapeHtml(post.category) + "]</small></p>";
     html += "<hr>";
-    html += renderContent(post.content);
+    html += "<div class=\"content\">" + renderMarkdownWithMath(post.content) + "</div>";
     document.getElementById("post").innerHTML = html;
   })
   .catch(function () {

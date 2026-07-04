@@ -3,6 +3,14 @@
 <head>
 <meta charset="utf-8">
 <title>관리자 - Jun's Notes</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+<script src="render.js"></script>
+<style>
+  #preview { border: 1px solid #999; padding: 8px; margin-top: 4px; }
+  #toolbar button { margin-right: 4px; }
+</style>
 </head>
 <body bgcolor="#FFFFFF" text="#000000" link="#0000EE" vlink="#551A8B">
 <font face="Times New Roman, Times, serif">
@@ -36,8 +44,28 @@ Token: <input type="password" id="f-token" size="50">
 <p>분류: <input type="text" id="f-category" list="cat-list">
 <datalist id="cat-list"></datalist></p>
 <p>날짜: <input type="date" id="f-date"></p>
-<p>내용:<br>
-<textarea id="f-content" rows="15" cols="70"></textarea></p>
+
+<p>
+내용 (마크다운, 수식은 <code>$x^2$</code> 또는 <code>$$...$$</code>):<br>
+<span id="toolbar">
+<button type="button" data-wrap="**">굵게</button>
+<button type="button" data-wrap="*">기울임</button>
+<button type="button" id="btn-heading">제목</button>
+<button type="button" id="btn-link">링크</button>
+<button type="button" id="btn-math">수식</button>
+</span>
+</p>
+<textarea id="f-content" rows="15" cols="70"></textarea>
+
+<p>
+이미지: <input type="file" id="f-image" accept="image/*">
+<button id="btn-upload-image">이미지 업로드</button>
+<span id="image-status"></span>
+</p>
+
+<p><b>미리보기</b></p>
+<div id="preview"></div>
+
 <p>
 <button id="btn-submit">저장 (커밋)</button>
 <button id="btn-cancel-edit" style="display:none;">수정 취소</button>
@@ -47,6 +75,7 @@ Token: <input type="password" id="f-token" size="50">
 <hr>
 
 <h3>기존 글</h3>
+<p id="cat-summary"></p>
 <div id="post-list">불러오는 중...</div>
 
 <script>
@@ -67,8 +96,8 @@ function b64DecodeUnicode(str) {
   }).join(""));
 }
 
-function escapeHtml(s) {
-  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+function b64EncodeBinary(dataUrl) {
+  return dataUrl.slice(dataUrl.indexOf(",") + 1);
 }
 
 function slugify(title) {
@@ -77,6 +106,10 @@ function slugify(title) {
     .replace(/^-+|-+$/g, "")
     .slice(0, 50);
   return s || "post";
+}
+
+function sanitizeFilename(name) {
+  return name.replace(/[^\p{L}\p{N}.\-]+/gu, "-").slice(0, 60);
 }
 
 function getToken() {
@@ -90,27 +123,36 @@ function ghHeaders() {
   };
 }
 
-function ghGetPosts() {
-  return fetch("https://api.github.com/repos/" + OWNER + "/" + REPO + "/contents/" + PATH + "?ref=" + BRANCH, {
+function ghGetFile(path) {
+  return fetch("https://api.github.com/repos/" + OWNER + "/" + REPO + "/contents/" + path + "?ref=" + BRANCH, {
     headers: ghHeaders()
   }).then(function (res) {
     if (!res.ok) throw new Error("불러오기 실패 (" + res.status + ")");
     return res.json();
-  }).then(function (data) {
+  });
+}
+
+function ghGetPosts() {
+  return ghGetFile(PATH).then(function (data) {
     return { sha: data.sha, posts: JSON.parse(b64DecodeUnicode(data.content)) };
   });
 }
 
-function ghPutPosts(posts, sha, message) {
-  var content = b64EncodeUnicode(JSON.stringify(posts, null, 2));
-  return fetch("https://api.github.com/repos/" + OWNER + "/" + REPO + "/contents/" + PATH, {
+function ghPutFile(path, base64Content, sha, message) {
+  var body = { message: message, content: base64Content, branch: BRANCH };
+  if (sha) body.sha = sha;
+  return fetch("https://api.github.com/repos/" + OWNER + "/" + REPO + "/contents/" + path, {
     method: "PUT",
     headers: Object.assign(ghHeaders(), { "Content-Type": "application/json" }),
-    body: JSON.stringify({ message: message, content: content, sha: sha, branch: BRANCH })
+    body: JSON.stringify(body)
   }).then(function (res) {
     if (!res.ok) return res.text().then(function (t) { throw new Error("저장 실패 (" + res.status + "): " + t); });
     return res.json();
   });
+}
+
+function ghPutPosts(posts, sha, message) {
+  return ghPutFile(PATH, b64EncodeUnicode(JSON.stringify(posts, null, 2)), sha, message);
 }
 
 function setStatus(msg, isError) {
@@ -127,17 +169,44 @@ function resetForm() {
   document.getElementById("f-date").value = new Date().toISOString().slice(0, 10);
   document.getElementById("f-content").value = "";
   document.getElementById("btn-cancel-edit").style.display = "none";
+  updatePreview();
+}
+
+function updatePreview() {
+  var raw = document.getElementById("f-content").value;
+  document.getElementById("preview").innerHTML = raw.trim() ? renderMarkdownWithMath(raw) : "<i>(내용 없음)</i>";
+}
+
+function insertAtCursor(before, after, placeholder) {
+  var ta = document.getElementById("f-content");
+  var start = ta.selectionStart;
+  var end = ta.selectionEnd;
+  var selected = ta.value.slice(start, end) || placeholder || "";
+  var newText = before + selected + after;
+  ta.value = ta.value.slice(0, start) + newText + ta.value.slice(end);
+  var cursorStart = start + before.length;
+  var cursorEnd = cursorStart + selected.length;
+  ta.focus();
+  ta.setSelectionRange(cursorStart, cursorEnd);
+  updatePreview();
 }
 
 function loadPostList() {
   fetch("posts.json?_=" + Date.now()).then(function (r) { return r.json(); }).then(function (posts) {
     posts.sort(function (a, b) { return b.date.localeCompare(a.date); });
 
+    var counts = {};
     var categories = [];
-    posts.forEach(function (p) { if (categories.indexOf(p.category) === -1) categories.push(p.category); });
+    posts.forEach(function (p) {
+      if (categories.indexOf(p.category) === -1) categories.push(p.category);
+      counts[p.category] = (counts[p.category] || 0) + 1;
+    });
     document.getElementById("cat-list").innerHTML = categories.map(function (c) {
       return "<option value=\"" + escapeHtml(c) + "\">";
     }).join("");
+    document.getElementById("cat-summary").textContent = categories.length
+      ? categories.map(function (c) { return "[" + c + "] " + counts[c] + "건"; }).join("  ")
+      : "";
 
     if (posts.length === 0) {
       document.getElementById("post-list").innerHTML = "<p>글이 없습니다.</p>";
@@ -170,6 +239,7 @@ function loadPostList() {
         document.getElementById("f-date").value = post.date;
         document.getElementById("f-content").value = post.content;
         document.getElementById("btn-cancel-edit").style.display = "";
+        updatePreview();
         window.scrollTo(0, 0);
       });
     });
@@ -208,6 +278,46 @@ document.getElementById("btn-clear-token").addEventListener("click", function ()
   document.getElementById("token-status").textContent = "토큰 삭제됨";
 });
 document.getElementById("btn-cancel-edit").addEventListener("click", resetForm);
+
+document.getElementById("f-content").addEventListener("input", updatePreview);
+
+document.querySelectorAll("#toolbar button[data-wrap]").forEach(function (btn) {
+  btn.addEventListener("click", function () {
+    var w = btn.getAttribute("data-wrap");
+    insertAtCursor(w, w, "텍스트");
+  });
+});
+document.getElementById("btn-heading").addEventListener("click", function () {
+  insertAtCursor("## ", "", "제목");
+});
+document.getElementById("btn-link").addEventListener("click", function () {
+  insertAtCursor("[", "](https://)", "링크텍스트");
+});
+document.getElementById("btn-math").addEventListener("click", function () {
+  insertAtCursor("$", "$", "x^2");
+});
+
+document.getElementById("btn-upload-image").addEventListener("click", function () {
+  var input = document.getElementById("f-image");
+  var file = input.files[0];
+  if (!file) { document.getElementById("image-status").textContent = "파일을 선택하세요."; return; }
+  if (!getToken()) { document.getElementById("image-status").textContent = "먼저 토큰을 입력하세요."; return; }
+
+  document.getElementById("image-status").textContent = "업로드 중...";
+  var reader = new FileReader();
+  reader.onload = function () {
+    var base64 = b64EncodeBinary(reader.result);
+    var path = "images/" + Date.now() + "-" + sanitizeFilename(file.name);
+    ghPutFile(path, base64, null, "Upload image: " + file.name).then(function () {
+      document.getElementById("image-status").textContent = "업로드 완료";
+      insertAtCursor("![](" + path + ")", "", "");
+      input.value = "";
+    }).catch(function (e) {
+      document.getElementById("image-status").textContent = e.message;
+    });
+  };
+  reader.readAsDataURL(file);
+});
 
 document.getElementById("btn-submit").addEventListener("click", function () {
   if (!getToken()) { setStatus("먼저 토큰을 입력하고 저장하세요.", true); return; }
