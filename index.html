@@ -13,16 +13,79 @@
 
 <hr>
 
-<h3>2026</h3>
+<p id="cat-filters">분류: <a href="index.html">[전체]</a></p>
 
-<table cellpadding="2" cellspacing="0" border="0">
-<tr><td valign="top">2026.07.04</td><td>&nbsp;</td><td>[학습]</td><td>&nbsp;</td><td><a href="posts/2026-07-04-hello.html">블로그를 시작하며</a></td></tr>
-<tr><td valign="top">2026.07.04</td><td>&nbsp;</td><td>[글]</td><td>&nbsp;</td><td><a href="posts/2026-07-04-first-thoughts.html">첫 글</a></td></tr>
-</table>
+<div id="post-list">불러오는 중...</div>
 
 <hr>
 
-<p><small>Last updated: 2026.07.04</small></p>
+<p><small>Last updated: <span id="updated"></span></small></p>
+<p><small><a href="admin.html">관리자</a></small></p>
+
+<script>
+function escapeHtml(s) {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+var params = new URLSearchParams(location.search);
+var activeCategory = params.get("cat");
+
+fetch("posts.json?_=" + Date.now())
+  .then(function (r) { return r.json(); })
+  .then(function (posts) {
+    posts.sort(function (a, b) { return b.date.localeCompare(a.date); });
+
+    var categories = [];
+    posts.forEach(function (p) {
+      if (categories.indexOf(p.category) === -1) categories.push(p.category);
+    });
+
+    var filterHtml = "분류: <a href=\"index.html\">[전체]</a> ";
+    categories.forEach(function (c) {
+      filterHtml += "<a href=\"index.html?cat=" + encodeURIComponent(c) + "\">[" + escapeHtml(c) + "]</a> ";
+    });
+    document.getElementById("cat-filters").innerHTML = filterHtml;
+
+    var visible = activeCategory
+      ? posts.filter(function (p) { return p.category === activeCategory; })
+      : posts;
+
+    if (visible.length === 0) {
+      document.getElementById("post-list").innerHTML = "<p>글이 없습니다.</p>";
+      return;
+    }
+
+    var byYear = {};
+    var years = [];
+    visible.forEach(function (p) {
+      var y = p.date.slice(0, 4);
+      if (!byYear[y]) { byYear[y] = []; years.push(y); }
+      byYear[y].push(p);
+    });
+    years.sort().reverse();
+
+    var html = "";
+    years.forEach(function (y) {
+      html += "<h3>" + y + "</h3><table cellpadding=\"2\" cellspacing=\"0\" border=\"0\">";
+      byYear[y].forEach(function (p) {
+        html += "<tr>";
+        html += "<td valign=\"top\">" + escapeHtml(p.date) + "</td>";
+        html += "<td>&nbsp;</td>";
+        html += "<td>[" + escapeHtml(p.category) + "]</td>";
+        html += "<td>&nbsp;</td>";
+        html += "<td><a href=\"post.html?slug=" + encodeURIComponent(p.slug) + "\">" + escapeHtml(p.title) + "</a></td>";
+        html += "</tr>";
+      });
+      html += "</table>";
+    });
+    document.getElementById("post-list").innerHTML = html;
+  })
+  .catch(function (e) {
+    document.getElementById("post-list").innerHTML = "<p>글 목록을 불러오지 못했습니다.</p>";
+  });
+
+document.getElementById("updated").textContent = new Date().toISOString().slice(0, 10).replace(/-/g, ".");
+</script>
 
 </font>
 </body>

@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>관리자 - Jun's Notes</title>
+</head>
+<body bgcolor="#FFFFFF" text="#000000" link="#0000EE" vlink="#551A8B">
+<font face="Times New Roman, Times, serif">
+
+<p><a href="index.html">&lt;&lt; 블로그로</a></p>
+
+<h2>관리자</h2>
+
+<p>
+GitHub Personal Access Token이 있어야 글을 쓰거나 지울 수 있습니다.
+저장소(<code>everbrave812/blog</code>)에 대한 <b>Contents: Read and write</b> 권한만 가진
+fine-grained 토큰을 만들어 아래에 입력하세요. 토큰은 이 브라우저의 localStorage에만 저장되며 서버로 전송되지 않습니다.
+</p>
+
+<p>
+토큰 발급: <a href="https://github.com/settings/personal-access-tokens/new" target="_blank">https://github.com/settings/personal-access-tokens/new</a>
+</p>
+
+<p>
+Token: <input type="password" id="f-token" size="50">
+<button id="btn-save-token">저장</button>
+<button id="btn-clear-token">지우기</button>
+<span id="token-status"></span>
+</p>
+
+<hr>
+
+<h3 id="form-title">새 글 작성</h3>
+
+<p>제목: <input type="text" id="f-title" size="50"></p>
+<p>분류: <input type="text" id="f-category" list="cat-list">
+<datalist id="cat-list"></datalist></p>
+<p>날짜: <input type="date" id="f-date"></p>
+<p>내용:<br>
+<textarea id="f-content" rows="15" cols="70"></textarea></p>
+<p>
+<button id="btn-submit">저장 (커밋)</button>
+<button id="btn-cancel-edit" style="display:none;">수정 취소</button>
+</p>
+<p id="status"></p>
+
+<hr>
+
+<h3>기존 글</h3>
+<div id="post-list">불러오는 중...</div>
+
+<script>
+var OWNER = "everbrave812";
+var REPO = "blog";
+var BRANCH = "main";
+var PATH = "posts.json";
+var editingSlug = null;
+
+function b64EncodeUnicode(str) {
+  return btoa(encodeURIComponent(str).replace(/%([0-9A-F]{2})/g, function (m, p1) {
+    return String.fromCharCode("0x" + p1);
+  }));
+}
+function b64DecodeUnicode(str) {
+  return decodeURIComponent(atob(str.replace(/\n/g, "")).split("").map(function (c) {
+    return "%" + ("00" + c.charCodeAt(0).toString(16)).slice(-2);
+  }).join(""));
+}
+
+function escapeHtml(s) {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function slugify(title) {
+  var s = title.trim().toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 50);
+  return s || "post";
+}
+
+function getToken() {
+  return localStorage.getItem("gh_pat") || "";
+}
+
+function ghHeaders() {
+  return {
+    "Authorization": "Bearer " + getToken(),
+    "Accept": "application/vnd.github+json"
+  };
+}
+
+function ghGetPosts() {
+  return fetch("https://api.github.com/repos/" + OWNER + "/" + REPO + "/contents/" + PATH + "?ref=" + BRANCH, {
+    headers: ghHeaders()
+  }).then(function (res) {
+    if (!res.ok) throw new Error("불러오기 실패 (" + res.status + ")");
+    return res.json();
+  }).then(function (data) {
+    return { sha: data.sha, posts: JSON.parse(b64DecodeUnicode(data.content)) };
+  });
+}
+
+function ghPutPosts(posts, sha, message) {
+  var content = b64EncodeUnicode(JSON.stringify(posts, null, 2));
+  return fetch("https://api.github.com/repos/" + OWNER + "/" + REPO + "/contents/" + PATH, {
+    method: "PUT",
+    headers: Object.assign(ghHeaders(), { "Content-Type": "application/json" }),
+    body: JSON.stringify({ message: message, content: content, sha: sha, branch: BRANCH })
+  }).then(function (res) {
+    if (!res.ok) return res.text().then(function (t) { throw new Error("저장 실패 (" + res.status + "): " + t); });
+    return res.json();
+  });
+}
+
+function setStatus(msg, isError) {
+  var el = document.getElementById("status");
+  el.textContent = msg;
+  el.style.color = isError ? "#CC0000" : "#006600";
+}
+
+function resetForm() {
+  editingSlug = null;
+  document.getElementById("form-title").textContent = "새 글 작성";
+  document.getElementById("f-title").value = "";
+  document.getElementById("f-category").value = "";
+  document.getElementById("f-date").value = new Date().toISOString().slice(0, 10);
+  document.getElementById("f-content").value = "";
+  document.getElementById("btn-cancel-edit").style.display = "none";
+}
+
+function loadPostList() {
+  fetch("posts.json?_=" + Date.now()).then(function (r) { return r.json(); }).then(function (posts) {
+    posts.sort(function (a, b) { return b.date.localeCompare(a.date); });
+
+    var categories = [];
+    posts.forEach(function (p) { if (categories.indexOf(p.category) === -1) categories.push(p.category); });
+    document.getElementById("cat-list").innerHTML = categories.map(function (c) {
+      return "<option value=\"" + escapeHtml(c) + "\">";
+    }).join("");
+
+    if (posts.length === 0) {
+      document.getElementById("post-list").innerHTML = "<p>글이 없습니다.</p>";
+      return;
+    }
+
+    var html = "<table cellpadding=\"2\" cellspacing=\"0\" border=\"0\">";
+    posts.forEach(function (p) {
+      html += "<tr>";
+      html += "<td>" + escapeHtml(p.date) + "</td>";
+      html += "<td>[" + escapeHtml(p.category) + "]</td>";
+      html += "<td>" + escapeHtml(p.title) + "</td>";
+      html += "<td><a href=\"#\" class=\"edit-btn\" data-slug=\"" + encodeURIComponent(p.slug) + "\">수정</a></td>";
+      html += "<td><a href=\"#\" class=\"delete-btn\" data-slug=\"" + encodeURIComponent(p.slug) + "\">삭제</a></td>";
+      html += "</tr>";
+    });
+    html += "</table>";
+    document.getElementById("post-list").innerHTML = html;
+
+    document.querySelectorAll(".edit-btn").forEach(function (a) {
+      a.addEventListener("click", function (e) {
+        e.preventDefault();
+        var slug = decodeURIComponent(a.getAttribute("data-slug"));
+        var post = posts.filter(function (p) { return p.slug === slug; })[0];
+        if (!post) return;
+        editingSlug = slug;
+        document.getElementById("form-title").textContent = "글 수정: " + post.title;
+        document.getElementById("f-title").value = post.title;
+        document.getElementById("f-category").value = post.category;
+        document.getElementById("f-date").value = post.date;
+        document.getElementById("f-content").value = post.content;
+        document.getElementById("btn-cancel-edit").style.display = "";
+        window.scrollTo(0, 0);
+      });
+    });
+
+    document.querySelectorAll(".delete-btn").forEach(function (a) {
+      a.addEventListener("click", function (e) {
+        e.preventDefault();
+        var slug = decodeURIComponent(a.getAttribute("data-slug"));
+        if (!getToken()) { setStatus("먼저 토큰을 입력하세요.", true); return; }
+        if (!confirm("정말 삭제하시겠습니까?")) return;
+        setStatus("삭제 중...");
+        ghGetPosts().then(function (r) {
+          var updated = r.posts.filter(function (p) { return p.slug !== slug; });
+          return ghPutPosts(updated, r.sha, "Delete post: " + slug);
+        }).then(function () {
+          setStatus("삭제 완료. 1분 내 사이트에 반영됩니다.");
+          loadPostList();
+        }).catch(function (e) { setStatus(e.message, true); });
+      });
+    });
+  }).catch(function () {
+    document.getElementById("post-list").innerHTML = "<p>목록을 불러오지 못했습니다.</p>";
+  });
+}
+
+document.getElementById("btn-save-token").addEventListener("click", function () {
+  var v = document.getElementById("f-token").value.trim();
+  if (v) {
+    localStorage.setItem("gh_pat", v);
+    document.getElementById("f-token").value = "";
+    document.getElementById("token-status").textContent = "토큰 저장됨";
+  }
+});
+document.getElementById("btn-clear-token").addEventListener("click", function () {
+  localStorage.removeItem("gh_pat");
+  document.getElementById("token-status").textContent = "토큰 삭제됨";
+});
+document.getElementById("btn-cancel-edit").addEventListener("click", resetForm);
+
+document.getElementById("btn-submit").addEventListener("click", function () {
+  if (!getToken()) { setStatus("먼저 토큰을 입력하고 저장하세요.", true); return; }
+  var title = document.getElementById("f-title").value.trim();
+  var category = document.getElementById("f-category").value.trim();
+  var date = document.getElementById("f-date").value;
+  var content = document.getElementById("f-content").value;
+  if (!title || !category || !date || !content.trim()) {
+    setStatus("모든 항목을 입력하세요.", true);
+    return;
+  }
+
+  setStatus("저장 중...");
+  ghGetPosts().then(function (r) {
+    var posts = r.posts;
+    if (editingSlug) {
+      var idx = posts.findIndex(function (p) { return p.slug === editingSlug; });
+      if (idx === -1) throw new Error("수정할 글을 찾지 못했습니다.");
+      posts[idx] = { slug: editingSlug, title: title, category: category, date: date, content: content };
+      return ghPutPosts(posts, r.sha, "Update post: " + title);
+    } else {
+      var base = date + "-" + slugify(title);
+      var slug = base;
+      var n = 2;
+      while (posts.some(function (p) { return p.slug === slug; })) {
+        slug = base + "-" + n;
+        n++;
+      }
+      posts.push({ slug: slug, title: title, category: category, date: date, content: content });
+      return ghPutPosts(posts, r.sha, "Add post: " + title);
+    }
+  }).then(function () {
+    setStatus("저장 완료. 1분 내 사이트에 반영됩니다.");
+    resetForm();
+    loadPostList();
+  }).catch(function (e) { setStatus(e.message, true); });
+});
+
+resetForm();
+loadPostList();
+</script>
+
+</font>
+</body>
+</html>
